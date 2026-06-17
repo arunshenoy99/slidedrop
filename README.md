@@ -4,8 +4,12 @@ A fast, static **presentation viewer** hosted on **Cloudflare Pages** that rende
 stored in **Cloudflare R2**. To publish a new deck, you just replace one file in R2 — no
 rebuild, no redeploy. Point it at any PDF; it's not tied to any particular deck.
 
+Pages are rasterised on the CPU in WebAssembly (PDFium) and blitted to a canvas, so **any
+PDF renders identically on every browser** — including decks with gradient/transparency
+backgrounds that some GPU-accelerated renderers corrupt. No pre-processing required.
+
 ```
-Browser ─► Cloudflare Pages (HTML + PDF.js)
+Browser ─► Cloudflare Pages (HTML + PDFium/WASM viewer)
                  └─ GET /deck ─► Pages Function (functions/deck.js)
                                        └─ R2 bucket, key "deck.pdf"
 ```
@@ -21,7 +25,8 @@ Browser ─► Cloudflare Pages (HTML + PDF.js)
 
 The viewer is a PWA with a service worker (`public/sw.js`):
 
-- **First visit** downloads the app + the PDF once and caches both on the device.
+- **First visit** downloads the app (including the ~4 MB PDFium wasm engine, compressed in
+  transit) + the PDF once and caches both on the device. Subsequent visits download nothing.
 - **Every later visit** loads instantly from cache — including with **no connection at
   all**. An "Offline — showing saved deck" pill appears when you're offline.
 - When you publish a new deck, the service worker notices it in the background and shows a
@@ -30,7 +35,7 @@ The viewer is a PWA with a service worker (`public/sw.js`):
 - It's **installable** to a phone home screen / desktop (via `manifest.webmanifest`).
 
 > ⚠️ **When you change the UI** (`index.html`, `app.js`, `styles.css`, or the vendored
-> PDF.js), bump `CACHE_VERSION` in `public/sw.js` (e.g. `v1` → `v2`) and redeploy, so
+> engine), bump `CACHE_VERSION` in `public/sw.js` (e.g. `v1` → `v2`) and redeploy, so
 > clients drop the old cached shell. Swapping the *PDF* needs no version bump.
 
 ## Files
@@ -38,12 +43,12 @@ The viewer is a PWA with a service worker (`public/sw.js`):
 | Path | Purpose |
 |------|---------|
 | `public/index.html`, `app.js`, `styles.css` | The viewer UI |
-| `public/vendor/pdf.*.mjs` | Pinned PDF.js (served from your own domain) |
+| `public/vendor/pdfium.*` | Pinned PDFium engine — wasm + glue (served from your own domain) |
 | `public/_headers` | Cache headers for static assets |
 | `public/sw.js` | Service worker: offline caching + new-deck detection |
 | `public/manifest.webmanifest`, `icon.svg` | PWA install metadata + icon |
 | `functions/deck.js` | Serves the deck PDF from R2 at `/deck` (read-only, single key) |
-| `scripts/flatten.mjs`, `publish.mjs` | Flatten a deck (Ghostscript) and publish it to R2 |
+| `scripts/flatten.mjs` | Optional: rasterise a deck to a smaller flat PDF (Ghostscript) |
 | `wrangler.toml` | Pages config + R2 binding |
 
 ---
@@ -103,37 +108,30 @@ Cloudflare, the DNS record and HTTPS certificate are configured automatically.
 
 ## Publishing a new deck
 
+Replace the object — that's the whole workflow. Any PDF works as-is (the viewer rasterises
+it on the CPU, so there's nothing to pre-process). Either:
+
 ```bash
 npm run deck:publish -- ./path/to/new-deck.pdf
 ```
 
-This **flattens** the PDF (see below) and uploads it to R2 as `deck.pdf`. No redeploy needed.
+…or drag-and-drop the file in **dashboard → R2 → your bucket**, saving it as `deck.pdf`
+(overwrite the existing object). No redeploy needed.
 
-Prefer the dashboard? Flatten first, then drag-and-drop the result:
+Responses are briefly edge-cached, so a new deck may take a short while to appear; do a
+hard refresh, or purge the cache in the dashboard, to see it immediately.
+
+### Optional: shrink a deck
+
+Large PDFs download once and cache, so size rarely matters. If you do want a smaller file,
+flatten it to opaque raster pages (needs **Ghostscript**):
 
 ```bash
 npm run deck:flatten -- ./path/to/new-deck.pdf   # prints the flattened file's path
 ```
 
-…then upload that `*.flattened.pdf` in **dashboard → R2 → your bucket**, saving it as
-`deck.pdf` (overwrite the existing object).
-
-Responses are briefly edge-cached, so a new deck may take a short while to appear; do a
-hard refresh, or purge the cache in the dashboard, to see it immediately.
-
-### Why flatten? (important)
-
-Decks exported via "print to PDF" (e.g. from a browser) often use gradient and
-soft-mask backgrounds. The in-browser renderer composites those at display time, and some
-GPU-accelerated canvas stacks — notably **iOS Safari and desktop Chromium** — corrupt that
-compositing into a **pink/magenta wash**, even though the PDF itself is perfectly correct
-(it looks fine in native PDF viewers). Flattening rasterises each page to a single opaque
-image (via Ghostscript), removing all transparency so every browser draws it identically.
-
-`deck:publish` and `deck:flatten` do this automatically — **always upload a flattened
-file.** Flattening needs **Ghostscript** (`gs`) installed locally (`brew install
-ghostscript` / `sudo apt install ghostscript`). Tune sharpness with `--dpi <n>` (default
-200); the viewer itself needs no changes.
+Then publish/upload that `*.flattened.pdf`. Tune resolution with `--dpi <n>` (default 200).
+This is purely a size optimisation — it is **not** required for correct rendering.
 
 ---
 
@@ -168,12 +166,12 @@ throttle rather than charge. Leave billing on the free plan and there's nothing 
 
 ---
 
-## Updating PDF.js later
+## Updating the PDF engine later
 
 ```bash
-npm install pdfjs-dist@latest
-npm run vendor      # recopies the build into public/vendor
-# then deploy (push to main, or `npm run deploy`)
+npm install -D @hyzyla/pdfium@latest
+npm run vendor      # recopies the wasm + glue into public/vendor
+# bump CACHE_VERSION in public/sw.js, then deploy (push to main, or `npm run deploy`)
 ```
 
 ## Notes

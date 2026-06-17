@@ -1,4 +1,4 @@
-# Cache the immutable vendored PDF.js bundles aggressively.
+# Cache the immutable vendored PDF engine (PDFium wasm + glue) aggressively.
 /vendor/*
   Cache-Control: public, max-age=31536000, immutable
 
