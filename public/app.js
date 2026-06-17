@@ -84,7 +84,14 @@ async function renderPage(num) {
   els.canvas.style.width = Math.floor(viewport.width / dpr) + "px";
   els.canvas.style.height = Math.floor(viewport.height / dpr) + "px";
 
-  const task = page.render({ canvasContext: ctx, viewport });
+  // iOS Safari does not zero-initialize an { alpha: false } canvas backing store, so
+  // wherever the PDF paints no background it shows uninitialized memory — typically a
+  // pink/magenta wash (desktop browsers clear the buffer, which is why they look fine).
+  // Paint an opaque white "paper" base first, exactly like the official PDF.js viewer.
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, els.canvas.width, els.canvas.height);
+
+  const task = page.render({ canvasContext: ctx, viewport, background: "#ffffff" });
   try {
     await task.promise;
   } catch (e) {
