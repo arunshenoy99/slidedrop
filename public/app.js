@@ -1,15 +1,9 @@
-import { PDFiumLibrary } from "/vendor/pdfium.mjs";
+import * as pdfjsLib from "/vendor/pdf.min.mjs";
 
-// Why PDFium (WASM) instead of a canvas-based PDF renderer:
-// decks exported via "print to PDF" use gradient + soft-mask backgrounds. Renderers that
-// composite those on GPU-accelerated 2D canvases (iOS Safari, desktop Chromium) corrupt
-// the result into a pink/magenta wash. PDFium rasterises each page entirely on the CPU
-// inside WebAssembly and hands back a finished RGBA bitmap; we blit it with putImageData —
-// a direct pixel copy with no compositing — so every browser shows identical, correct
-// colours for any PDF, with no pre-processing.
+pdfjsLib.GlobalWorkerOptions.workerSrc = "/vendor/pdf.worker.min.mjs";
+
+// Same-origin Pages Function that streams the current PDF from R2.
 const PDF_URL = "/deck";
-const WASM_URL = "/vendor/pdfium.wasm";
-const MAX_CANVAS_PIXELS = 16_000_000; // guard against iOS/desktop canvas size limits
 
 const els = {
   canvas: document.getElementById("canvas"),
@@ -29,14 +23,15 @@ const els = {
 
 const ctx = els.canvas.getContext("2d", { alpha: false });
 
-let lib = null;
-let doc = null;
+let pdfDoc = null;
 let pageCount = 0;
-let current = 1; // 1-based
-let renderToken = 0; // cancels stale renders
-const pageCache = new Map(); // pageNum -> PDFiumPage handle
+let current = 1;          // 1-based
+let renderToken = 0;      // cancels stale renders
+let renderTask = null;    // in-flight PDF.js RenderTask, so it can be cancelled
+const pageCache = new Map(); // pageNum -> pdf page proxy
 
 function clampDpr() {
+  // Cap DPR so huge retina canvases don't blow past GPU/memory limits.
   return Math.min(window.devicePixelRatio || 1, 2.5);
 }
 
@@ -47,7 +42,9 @@ function pageFromHash() {
 
 function updateHash(n) {
   const target = "#" + n;
-  if (location.hash !== target) history.replaceState(null, "", target);
+  if (location.hash !== target) {
+    history.replaceState(null, "", target);
+  }
 }
 
 function updateControls() {
@@ -61,52 +58,70 @@ function updateControls() {
   els.canvas.setAttribute("aria-label", `Slide ${current} of ${pageCount}`);
 }
 
-function getPage(num) {
+async function getPage(num) {
   if (pageCache.has(num)) return pageCache.get(num);
-  const p = doc.getPage(num - 1); // PDFium is 0-based
+  const p = await pdfDoc.getPage(num);
   pageCache.set(num, p);
   return p;
 }
 
-// Pick a render scale that fills the stage at device resolution, capped so the canvas
-// never exceeds platform pixel limits.
-function scaleFor(page) {
-  const dpr = clampDpr();
-  const { originalWidth, originalHeight } = page.getOriginalSize();
-  const pad = 2 * parseFloat(getComputedStyle(els.stage).paddingLeft || "0");
-  const rect = els.stage.getBoundingClientRect();
-  const availW = Math.max(64, rect.width - pad);
-  const availH = Math.max(64, rect.height - pad);
-  let scale = Math.min((availW * dpr) / originalWidth, (availH * dpr) / originalHeight);
-  const px = originalWidth * scale * originalHeight * scale;
-  if (px > MAX_CANVAS_PIXELS) scale *= Math.sqrt(MAX_CANVAS_PIXELS / px);
-  return { scale, dpr };
-}
-
 async function renderPage(num) {
   const token = ++renderToken;
-  const page = getPage(num);
-  const { scale, dpr } = scaleFor(page);
+  // Cancel any in-flight render so two RenderTasks never paint the shared canvas at
+  // once — that overlap is what makes fast slide flips flicker or tear.
+  if (renderTask) { renderTask.cancel(); renderTask = null; }
+  const page = await getPage(num);
+  if (token !== renderToken) return; // superseded while awaiting the page
 
-  // CPU rasterise inside WASM -> finished RGBA bytes.
-  const r = await page.render({ scale, render: (b) => b.data });
-  if (token !== renderToken) return; // superseded by a newer navigation/resize
+  // Fit the page within the stage while honoring device pixel ratio for sharpness.
+  const dpr = clampDpr();
+  const unscaled = page.getViewport({ scale: 1 });
+  const stageRect = els.stage.getBoundingClientRect();
+  const pad = 2 * parseFloat(getComputedStyle(els.stage).paddingLeft || "0");
+  const availW = Math.max(64, stageRect.width - pad);
+  const availH = Math.max(64, stageRect.height - pad);
+  const fit = Math.min(availW / unscaled.width, availH / unscaled.height);
+  const viewport = page.getViewport({ scale: fit * dpr });
 
-  els.canvas.width = r.width;
-  els.canvas.height = r.height;
-  els.canvas.style.width = Math.floor(r.width / dpr) + "px";
-  els.canvas.style.height = Math.floor(r.height / dpr) + "px";
-  ctx.putImageData(new ImageData(new Uint8ClampedArray(r.data), r.width, r.height), 0, 0);
+  els.canvas.width = Math.floor(viewport.width);
+  els.canvas.height = Math.floor(viewport.height);
+  els.canvas.style.width = Math.floor(viewport.width / dpr) + "px";
+  els.canvas.style.height = Math.floor(viewport.height / dpr) + "px";
+
+  // Paint an opaque white "paper" base before rendering, like the official PDF.js viewer:
+  // an { alpha: false } canvas is otherwise uninitialized where a page paints no background.
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, els.canvas.width, els.canvas.height);
+
+  const task = page.render({ canvasContext: ctx, viewport, background: "#ffffff" });
+  renderTask = task;
+  try {
+    await task.promise;
+  } catch (e) {
+    if (e?.name === "RenderingCancelledException") return;
+    throw e;
+  } finally {
+    if (renderTask === task) renderTask = null;
+  }
+  if (token !== renderToken) return;
   els.canvas.classList.add("ready");
 }
 
+function preload(num) {
+  // Warm neighbours so flips feel instant; ignore failures silently.
+  [num + 1, num - 1].forEach((n) => {
+    if (n >= 1 && n <= pageCount && !pageCache.has(n)) getPage(n).catch(() => {});
+  });
+}
+
 async function goTo(num, { push = true } = {}) {
-  if (!doc) return;
+  if (!pdfDoc) return;
   const target = Math.min(Math.max(1, num), pageCount);
   current = target;
   updateControls();
   if (push) updateHash(target);
   await renderPage(target);
+  preload(target);
 }
 
 const next = () => goTo(current + 1);
@@ -118,49 +133,29 @@ function showError(msg) {
   els.error.hidden = false;
 }
 
-// Fetch the deck with download progress (one download; the service worker caches it).
-async function fetchDeck() {
-  const res = await fetch(PDF_URL);
-  if (!res.ok) {
-    const err = new Error(`deck fetch failed: ${res.status}`);
-    err.status = res.status;
-    throw err;
-  }
-  const total = Number(res.headers.get("content-length")) || 0;
-  if (!res.body || !total) return new Uint8Array(await res.arrayBuffer());
-
-  const reader = res.body.getReader();
-  const chunks = [];
-  let received = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    received += value.length;
-    els.loaderText.textContent = `Loading… ${Math.round((received / total) * 100)}%`;
-  }
-  const out = new Uint8Array(received);
-  let offset = 0;
-  for (const c of chunks) { out.set(c, offset); offset += c.length; }
-  return out;
-}
-
 async function load() {
   els.error.hidden = true;
   els.loader.hidden = false;
   els.canvas.classList.remove("ready");
   pageCache.clear();
-  if (doc) { try { doc.destroy(); } catch {} doc = null; }
   try {
-    if (!lib) lib = await PDFiumLibrary.init({ wasmUrl: WASM_URL });
-    const bytes = await fetchDeck();
-    doc = await lib.loadDocument(bytes);
-    pageCount = doc.getPageCount();
+    const task = pdfjsLib.getDocument({
+      url: PDF_URL,
+      // One full download instead of many range requests: fewer round-trips on weak
+      // connections, and a single response the service worker can cache cleanly.
+      disableRange: true,
+      disableAutoFetch: false,
+    });
+    task.onProgress = ({ loaded, total }) => {
+      if (total) els.loaderText.textContent = `Loading… ${Math.round((loaded / total) * 100)}%`;
+    };
+    pdfDoc = await task.promise;
+    pageCount = pdfDoc.numPages;
     els.loader.hidden = true;
     await goTo(pageFromHash(), { push: false });
   } catch (e) {
     console.error(e);
-    const msg = e?.status === 404
+    const msg = /404|not found/i.test(String(e?.message))
       ? "No presentation found. Upload a PDF to R2 as “deck.pdf”."
       : "Couldn’t load the presentation. Check your connection and retry.";
     showError(msg);
@@ -235,11 +230,11 @@ function flashUI() {
 }
 window.addEventListener("mousemove", () => { if (document.fullscreenElement) flashUI(); });
 
-/* ---------- Re-render on resize / hash ---------- */
+/* ---------- Re-render on resize / hash / visibility ---------- */
 let resizeTimer;
 window.addEventListener("resize", () => {
   clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => { if (doc) renderPage(current); }, 120);
+  resizeTimer = setTimeout(() => { if (pdfDoc) renderPage(current); }, 120);
 });
 window.addEventListener("hashchange", () => {
   const n = pageFromHash();
@@ -264,6 +259,7 @@ if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("/sw.js").catch(() => {});
   });
   navigator.serviceWorker.addEventListener("message", (e) => {
+    // The SW found a newer deck in the background; offer a refresh.
     if (e.data && e.data.type === "deck-updated") toast.hidden = false;
   });
 }

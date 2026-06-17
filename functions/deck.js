@@ -74,6 +74,7 @@ export async function onRequest(context) {
     "content-type": "application/pdf",
     "accept-ranges": "bytes",
     "cache-control": CACHE_CONTROL,
+    "x-content-type-options": "nosniff",
     etag,
   };
 
