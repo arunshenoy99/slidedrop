@@ -1,7 +1,7 @@
 // Service worker: makes the viewer load instantly on repeat visits and work on
 // flaky / no connection. Bump CACHE_VERSION whenever the app shell files change
 // so clients pick up the new UI.
-const CACHE_VERSION = "v2";
+const CACHE_VERSION = "v3";
 const SHELL_CACHE = `sd-shell-${CACHE_VERSION}`;
 const DECK_CACHE = `sd-deck-${CACHE_VERSION}`;
 

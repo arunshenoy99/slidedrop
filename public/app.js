@@ -21,7 +21,11 @@ const els = {
   stage: document.getElementById("stage"),
 };
 
-const ctx = els.canvas.getContext("2d", { alpha: false });
+// willReadFrequently forces a CPU-backed (software) 2D canvas. Some GPU/driver combos
+// (seen on iOS Safari and desktop Chromium) corrupt colors when compositing this kind of
+// PDF — gradient + soft-mask backgrounds render as a pink/magenta wash. Software raster
+// matches what poppler/print produce, so this keeps colors correct everywhere.
+const ctx = els.canvas.getContext("2d", { alpha: false, willReadFrequently: true });
 
 let pdfDoc = null;
 let pageCount = 0;
