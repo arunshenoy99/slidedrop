@@ -42,13 +42,26 @@ function parseRange(header, size) {
 }
 
 export async function onRequest(context) {
-  const { request, env } = context;
+  const { request, env, waitUntil } = context;
 
   if (!env.PDF_BUCKET) {
     return new Response("R2 binding 'PDF_BUCKET' is not configured.", { status: 500 });
   }
   if (request.method !== "GET" && request.method !== "HEAD") {
     return new Response("Method Not Allowed", { status: 405, headers: { allow: "GET, HEAD" } });
+  }
+
+  // Edge cache: a plain full GET is served straight from Cloudflare's cache, so a flood
+  // of requests collapses to ~1 R2 read per cache TTL (see CACHE_CONTROL) — this shields
+  // R2 ops and Function CPU from abuse/bursts. Range & conditional requests skip it.
+  const cache = caches.default;
+  const cacheable =
+    request.method === "GET" &&
+    !request.headers.get("range") &&
+    !request.headers.get("if-none-match");
+  if (cacheable) {
+    const hit = await cache.match(request);
+    if (hit) return hit;
   }
 
   // Cheap metadata lookup first (gives us size + etag without the body).
@@ -99,8 +112,11 @@ export async function onRequest(context) {
 
   const obj = await env.PDF_BUCKET.get(OBJECT_KEY);
   if (!obj) return notFound();
-  return new Response(obj.body, {
+  const response = new Response(obj.body, {
     status: 200,
     headers: { ...baseHeaders, "content-length": String(size) },
   });
+  // Populate the edge cache (TTL comes from Cache-Control) without delaying the response.
+  if (cacheable) waitUntil(cache.put(request, response.clone()));
+  return response;
 }
