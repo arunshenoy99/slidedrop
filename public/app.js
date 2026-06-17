@@ -1,5 +1,22 @@
 import * as pdfjsLib from "/vendor/pdf.min.mjs";
 
+// Force every 2D canvas onto a CPU-backed surface (willReadFrequently). PDF.js renders
+// soft masks / transparency groups on internal scratch canvases, and on some GPU-
+// accelerated stacks (iOS Safari, desktop Chromium) that compositing is corrupted into a
+// pink/magenta wash — even though the PDF is fine in software renderers. PDF.js sets this
+// hint on a few of its canvases but not the ones that matter here, so we patch globally:
+// CPU rendering matches the correct software output and works for any PDF.
+function forceCpu2d(proto) {
+  if (!proto) return;
+  const orig = proto.getContext;
+  proto.getContext = function (type, attrs) {
+    if (type === "2d") attrs = Object.assign({}, attrs, { willReadFrequently: true });
+    return orig.call(this, type, attrs);
+  };
+}
+forceCpu2d(HTMLCanvasElement.prototype);
+forceCpu2d(typeof OffscreenCanvas !== "undefined" && OffscreenCanvas.prototype);
+
 pdfjsLib.GlobalWorkerOptions.workerSrc = "/vendor/pdf.worker.min.mjs";
 
 // Same-origin Pages Function that streams the current PDF from R2.
