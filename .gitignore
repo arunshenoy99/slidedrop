@@ -1,0 +1,8 @@
+node_modules/
+.wrangler/
+.dev.vars
+*.log
+.DS_Store
+
+# Decks live in R2, not in the repo (keeps source code-only and decks private)
+*.pdf

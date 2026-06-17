@@ -1,0 +1,18 @@
+{
+  "name": "slidedrop",
+  "version": "1.0.0",
+  "description": "Slidedrop — a self-updating PDF presentation viewer on Cloudflare Pages + R2",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "vendor": "cp node_modules/pdfjs-dist/build/pdf.min.mjs public/vendor/pdf.min.mjs && cp node_modules/pdfjs-dist/build/pdf.worker.min.mjs public/vendor/pdf.worker.min.mjs",
+    "dev": "wrangler pages dev public",
+    "deploy": "wrangler pages deploy public",
+    "deck:local": "wrangler r2 object put slidedrop-deck/deck.pdf --local --file",
+    "deck:publish": "wrangler r2 object put slidedrop-deck/deck.pdf --remote --file"
+  },
+  "devDependencies": {
+    "pdfjs-dist": "^4.10.38",
+    "wrangler": "^4.101.0"
+  }
+}

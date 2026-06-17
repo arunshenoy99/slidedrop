@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b0b0f" />
+  <title>Slidedrop</title>
+  <meta name="description" content="Slidedrop — self-updating presentation viewer" />
+  <link rel="icon" href="/icon.svg" />
+  <link rel="apple-touch-icon" href="/icon.svg" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="modulepreload" href="/vendor/pdf.min.mjs" />
+</head>
+<body>
+  <main id="stage" class="stage" aria-label="Presentation slides">
+    <canvas id="canvas" role="img" aria-label="Slide"></canvas>
+
+    <div id="loader" class="loader" role="status" aria-live="polite">
+      <div class="spinner" aria-hidden="true"></div>
+      <p id="loader-text">Loading presentation…</p>
+    </div>
+
+    <div id="error" class="error" role="alert" hidden>
+      <p id="error-text">Couldn’t load the presentation.</p>
+      <button id="retry" class="btn" type="button">Retry</button>
+    </div>
+
+    <!-- Edge tap/click zones for prev/next (don't steal focus from buttons) -->
+    <button id="zone-prev" class="zone zone-prev" type="button" aria-label="Previous slide" tabindex="-1"></button>
+    <button id="zone-next" class="zone zone-next" type="button" aria-label="Next slide" tabindex="-1"></button>
+  </main>
+
+  <nav id="controls" class="controls" aria-label="Slide controls">
+    <button id="prev" class="btn icon" type="button" aria-label="Previous slide" title="Previous (←)">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <span id="counter" class="counter" aria-live="polite">– / –</span>
+    <button id="next" class="btn icon" type="button" aria-label="Next slide" title="Next (→)">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <button id="fullscreen" class="btn icon" type="button" aria-label="Toggle fullscreen" title="Fullscreen (F)">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+  </nav>
+
+  <div id="offline-pill" class="offline-pill" role="status" hidden>
+    <span class="dot" aria-hidden="true"></span> Offline — showing saved deck
+  </div>
+
+  <div id="toast" class="toast" role="status" hidden>
+    <span>A newer deck is available.</span>
+    <button id="toast-reload" class="btn toast-btn" type="button">Reload</button>
+  </div>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

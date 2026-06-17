@@ -1,0 +1,14 @@
+# Cloudflare Pages config for Slidedrop.
+# The R2 binding lets the /deck Pages Function read the PDF you upload each month.
+
+name = "slidedrop"
+pages_build_output_dir = "public"
+compatibility_date = "2024-11-01"
+
+# Binds the R2 bucket to env.PDF_BUCKET inside functions/deck.js.
+# `bucket_name` must match the bucket created with `wrangler r2 bucket create`.
+# `preview_bucket_name` is used by local `wrangler pages dev`.
+[[r2_buckets]]
+binding = "PDF_BUCKET"
+bucket_name = "slidedrop-deck"
+preview_bucket_name = "slidedrop-deck"
