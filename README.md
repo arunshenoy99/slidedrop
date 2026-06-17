@@ -43,6 +43,7 @@ The viewer is a PWA with a service worker (`public/sw.js`):
 | `public/sw.js` | Service worker: offline caching + new-deck detection |
 | `public/manifest.webmanifest`, `icon.svg` | PWA install metadata + icon |
 | `functions/deck.js` | Serves the deck PDF from R2 at `/deck` (read-only, single key) |
+| `scripts/flatten.mjs`, `publish.mjs` | Flatten a deck (Ghostscript) and publish it to R2 |
 | `wrangler.toml` | Pages config + R2 binding |
 
 ---
@@ -102,17 +103,37 @@ Cloudflare, the DNS record and HTTPS certificate are configured automatically.
 
 ## Publishing a new deck
 
-Replace the object — that's the whole workflow. Either:
-
 ```bash
 npm run deck:publish -- ./path/to/new-deck.pdf
 ```
 
-…or drag-and-drop the file in **dashboard → R2 → your bucket**, saving it as `deck.pdf`
-(overwrite the existing object). No redeploy needed.
+This **flattens** the PDF (see below) and uploads it to R2 as `deck.pdf`. No redeploy needed.
+
+Prefer the dashboard? Flatten first, then drag-and-drop the result:
+
+```bash
+npm run deck:flatten -- ./path/to/new-deck.pdf   # prints the flattened file's path
+```
+
+…then upload that `*.flattened.pdf` in **dashboard → R2 → your bucket**, saving it as
+`deck.pdf` (overwrite the existing object).
 
 Responses are briefly edge-cached, so a new deck may take a short while to appear; do a
 hard refresh, or purge the cache in the dashboard, to see it immediately.
+
+### Why flatten? (important)
+
+Decks exported via "print to PDF" (e.g. from a browser) often use gradient and
+soft-mask backgrounds. The in-browser renderer composites those at display time, and some
+GPU-accelerated canvas stacks — notably **iOS Safari and desktop Chromium** — corrupt that
+compositing into a **pink/magenta wash**, even though the PDF itself is perfectly correct
+(it looks fine in native PDF viewers). Flattening rasterises each page to a single opaque
+image (via Ghostscript), removing all transparency so every browser draws it identically.
+
+`deck:publish` and `deck:flatten` do this automatically — **always upload a flattened
+file.** Flattening needs **Ghostscript** (`gs`) installed locally (`brew install
+ghostscript` / `sudo apt install ghostscript`). Tune sharpness with `--dpi <n>` (default
+200); the viewer itself needs no changes.
 
 ---
 

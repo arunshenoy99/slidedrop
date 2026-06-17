@@ -8,8 +8,9 @@
     "vendor": "cp node_modules/pdfjs-dist/build/pdf.min.mjs public/vendor/pdf.min.mjs && cp node_modules/pdfjs-dist/build/pdf.worker.min.mjs public/vendor/pdf.worker.min.mjs",
     "dev": "wrangler pages dev public",
     "deploy": "wrangler pages deploy public",
-    "deck:local": "wrangler r2 object put slidedrop-deck/deck.pdf --local --file",
-    "deck:publish": "wrangler r2 object put slidedrop-deck/deck.pdf --remote --file"
+    "deck:flatten": "node scripts/flatten.mjs",
+    "deck:local": "node scripts/publish.mjs --local",
+    "deck:publish": "node scripts/publish.mjs"
   },
   "devDependencies": {
     "pdfjs-dist": "^4.10.38",

@@ -21,11 +21,7 @@ const els = {
   stage: document.getElementById("stage"),
 };
 
-// willReadFrequently forces a CPU-backed (software) 2D canvas. Some GPU/driver combos
-// (seen on iOS Safari and desktop Chromium) corrupt colors when compositing this kind of
-// PDF — gradient + soft-mask backgrounds render as a pink/magenta wash. Software raster
-// matches what poppler/print produce, so this keeps colors correct everywhere.
-const ctx = els.canvas.getContext("2d", { alpha: false, willReadFrequently: true });
+const ctx = els.canvas.getContext("2d", { alpha: false });
 
 let pdfDoc = null;
 let pageCount = 0;
@@ -88,10 +84,8 @@ async function renderPage(num) {
   els.canvas.style.width = Math.floor(viewport.width / dpr) + "px";
   els.canvas.style.height = Math.floor(viewport.height / dpr) + "px";
 
-  // iOS Safari does not zero-initialize an { alpha: false } canvas backing store, so
-  // wherever the PDF paints no background it shows uninitialized memory — typically a
-  // pink/magenta wash (desktop browsers clear the buffer, which is why they look fine).
-  // Paint an opaque white "paper" base first, exactly like the official PDF.js viewer.
+  // Paint an opaque white "paper" base before rendering, like the official PDF.js viewer:
+  // an { alpha: false } canvas is otherwise uninitialized where a page paints no background.
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(0, 0, els.canvas.width, els.canvas.height);
 
