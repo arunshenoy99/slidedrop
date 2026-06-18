@@ -1,10 +1,32 @@
-// Streams the current presentation PDF from R2 at a same-origin path (/deck).
-// Swap the object in R2 (key: "deck.pdf") to publish a new deck — no redeploy.
+// Streams a presentation PDF from R2 at /d/<path>, where <path> is one or more name
+// segments that map to the object "<path>.pdf". R2 keys are flat strings, so a "/" in the
+// path is just a key prefix — this is how decks can be grouped into folders:
+//   /                 -> /d/deck          -> R2 "deck.pdf"          (default deck)
+//   /meetup           -> /d/meetup        -> R2 "meetup.pdf"
+//   /wpblr/meetup     -> /d/wpblr/meetup  -> R2 "wpblr/meetup.pdf"
+// Publish by uploading "<path>.pdf" to R2 (see scripts/publish.mjs) — no redeploy.
 //
-// Binding required (set in Cloudflare Pages → Settings → Functions → R2 bindings,
-// and in wrangler.toml for local dev): PDF_BUCKET -> your R2 bucket.
+// Binding required (Cloudflare Pages → Settings → Functions → R2 bindings, and in
+// wrangler.toml for local dev): PDF_BUCKET -> your R2 bucket.
 
-const OBJECT_KEY = "deck.pdf";
+// SECURITY: the object key is request-derived, so the path is the trust boundary. We build
+// the key from EACH segment independently and only accept segments matching this strict
+// allowlist — lowercase alphanumerics and interior hyphens, no dots or slashes. Because no
+// segment can contain "." or "/", there is no path traversal ("..", encoded slashes) and
+// no way to escape the ".pdf" suffix. We also bound depth so a request can't fan out keys.
+const SEG_RE = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
+const MAX_DEPTH = 8;
+
+function keyFor(rawPath) {
+  // Catch-all params come as an array (["wpblr","meetup"]); be defensive about strings too.
+  const parts = Array.isArray(rawPath)
+    ? rawPath
+    : String(rawPath || "").split("/").filter(Boolean);
+  if (parts.length === 0 || parts.length > MAX_DEPTH) return null;
+  const segs = parts.map((p) => String(p).toLowerCase());
+  if (!segs.every((s) => SEG_RE.test(s))) return null;
+  return segs.join("/") + ".pdf";
+}
 
 // Monthly updates only, so a short edge cache is plenty. ETag handles freshness:
 // if the file is unchanged the browser/edge revalidates cheaply; when you upload a
@@ -12,7 +34,7 @@ const OBJECT_KEY = "deck.pdf";
 const CACHE_CONTROL = "public, max-age=60, stale-while-revalidate=86400";
 
 function notFound() {
-  return new Response("Presentation not found. Upload a PDF to R2 as 'deck.pdf'.", {
+  return new Response("Presentation not found. Upload a PDF to R2 named '<path>.pdf'.", {
     status: 404,
     headers: { "content-type": "text/plain; charset=utf-8" },
   });
@@ -42,7 +64,7 @@ function parseRange(header, size) {
 }
 
 export async function onRequest(context) {
-  const { request, env, waitUntil } = context;
+  const { request, env, params, waitUntil } = context;
 
   if (!env.PDF_BUCKET) {
     return new Response("R2 binding 'PDF_BUCKET' is not configured.", { status: 500 });
@@ -51,9 +73,13 @@ export async function onRequest(context) {
     return new Response("Method Not Allowed", { status: 405, headers: { allow: "GET, HEAD" } });
   }
 
+  const objectKey = keyFor(params.path);
+  if (!objectKey) return notFound(); // invalid/unsafe path -> treat as missing
+
   // Edge cache: a plain full GET is served straight from Cloudflare's cache, so a flood
   // of requests collapses to ~1 R2 read per cache TTL (see CACHE_CONTROL) — this shields
   // R2 ops and Function CPU from abuse/bursts. Range & conditional requests skip it.
+  // The cache key is the request URL, so each deck caches independently.
   const cache = caches.default;
   const cacheable =
     request.method === "GET" &&
@@ -65,7 +91,7 @@ export async function onRequest(context) {
   }
 
   // Cheap metadata lookup first (gives us size + etag without the body).
-  const head = await env.PDF_BUCKET.head(OBJECT_KEY);
+  const head = await env.PDF_BUCKET.head(objectKey);
   if (!head) return notFound();
 
   const size = head.size;
@@ -97,7 +123,7 @@ export async function onRequest(context) {
       });
     }
     const length = range.end - range.start + 1;
-    const obj = await env.PDF_BUCKET.get(OBJECT_KEY, {
+    const obj = await env.PDF_BUCKET.get(objectKey, {
       range: { offset: range.start, length },
     });
     if (!obj) return notFound();
@@ -111,7 +137,7 @@ export async function onRequest(context) {
     });
   }
 
-  const obj = await env.PDF_BUCKET.get(OBJECT_KEY);
+  const obj = await env.PDF_BUCKET.get(objectKey);
   if (!obj) return notFound();
   const response = new Response(obj.body, {
     status: 200,

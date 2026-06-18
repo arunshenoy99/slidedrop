@@ -1,7 +1,7 @@
 // Service worker: makes the viewer load instantly on repeat visits and work on
 // flaky / no connection. Bump CACHE_VERSION whenever the app shell files change
 // so clients pick up the new UI.
-const CACHE_VERSION = "v8";
+const CACHE_VERSION = "v10";
 const SHELL_CACHE = `sd-shell-${CACHE_VERSION}`;
 const DECK_CACHE = `sd-deck-${CACHE_VERSION}`;
 
@@ -42,18 +42,20 @@ async function notifyClients(message) {
 
 // The PDF: serve the cached copy immediately (instant + offline-proof), then check the
 // network in the background. If the deck changed (new ETag), cache it and tell the page.
+// Each deck (/d/<name>) is cached under its own URL, so every visited deck works offline.
 async function deckStrategy(event) {
+  const key = new URL(event.request.url).pathname; // e.g. "/d/meetup"
   const cache = await caches.open(DECK_CACHE);
-  const cached = await cache.match("/deck");
+  const cached = await cache.match(key);
 
   // `cache: "reload"` bypasses the browser HTTP cache so we truly re-check the origin
   // (otherwise the function's max-age would mask a freshly uploaded deck).
-  const revalidate = fetch("/deck", { cache: "reload" })
+  const revalidate = fetch(key, { cache: "reload" })
     .then(async (res) => {
       if (res && res.ok) {
         const newEtag = res.headers.get("ETag");
         const oldEtag = cached && cached.headers.get("ETag");
-        await cache.put("/deck", res.clone());
+        await cache.put(key, res.clone());
         if (cached && newEtag && oldEtag && newEtag !== oldEtag) {
           await notifyClients({ type: "deck-updated" });
         }
@@ -100,7 +102,7 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return; // ignore cross-origin
 
-  if (url.pathname === "/deck") {
+  if (url.pathname.startsWith("/d/")) {
     event.respondWith(deckStrategy(event));
   } else {
     event.respondWith(staleWhileRevalidate(event));

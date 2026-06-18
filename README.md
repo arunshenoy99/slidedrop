@@ -1,18 +1,26 @@
 # Slidedrop
 
-A fast, static **presentation viewer** hosted on **Cloudflare Pages** that renders a PDF
-stored in **Cloudflare R2**. To publish a new deck, you just replace one file in R2 — no
-rebuild, no redeploy. Point it at any PDF; it's not tied to any particular deck.
+A fast, static **presentation viewer** hosted on **Cloudflare Pages** that renders PDFs
+stored in **Cloudflare R2**. To publish or update a deck, you just upload one file to R2 —
+no rebuild, no redeploy. It's not tied to any particular deck.
+
+**One deployment serves many decks**, each at its own URL: the path picks the deck.
 
 ```
 Browser ─► Cloudflare Pages (HTML + PDF.js)
-                 └─ GET /deck ─► Pages Function (functions/deck.js)
-                                       └─ R2 bucket, key "deck.pdf"
+   /              ─► viewer ─► GET /d/deck         ─► Pages Function ─► R2 "deck.pdf"
+   /meetup        ─► viewer ─► GET /d/meetup       ─► functions/d/[[path]].js ─► R2 "meetup.pdf"
+   /wpblr/meetup  ─► viewer ─► GET /d/wpblr/meetup ─► functions/d/[[path]].js ─► R2 "wpblr/meetup.pdf"
 ```
 
+- **Multiple decks, optionally in folders:** `https://slides.example.com/meetup` renders
+  `meetup.pdf`, and `…/wpblr/meetup` renders `wpblr/meetup.pdf` (R2 "folders" are just `/`
+  in the key). The bare domain renders the default `deck.pdf`. Add a deck by uploading
+  `<path>.pdf` to R2.
 - **Navigation:** ← → / Space / PageUp / PageDown / Home / End, on-screen buttons,
   edge click zones, and touch swipe. Fullscreen with `F`.
-- **Deep links:** `https://your-domain/#3` opens slide 3.
+- **Deep links:** `https://your-domain/wpblr/meetup#3` opens slide 3 of the `wpblr/meetup`
+  deck.
 - **Crisp:** pages render to high-DPI canvas; neighbours preload for instant flips.
 - **Offline-first:** loads once, then works with no connection (see below).
 - **Cheap to run:** designed to fit comfortably within Cloudflare's free tiers.
@@ -21,7 +29,8 @@ Browser ─► Cloudflare Pages (HTML + PDF.js)
 
 The viewer is a PWA with a service worker (`public/sw.js`):
 
-- **First visit** downloads the app + the PDF once and caches both on the device.
+- **First visit** downloads the app once, plus each deck you open, and caches them on the
+  device. Decks are cached per URL, so every deck you've viewed stays available offline.
 - **Every later visit** loads instantly from cache — including with **no connection at
   all**. An "Offline — showing saved deck" pill appears when you're offline.
 - When you publish a new deck, the service worker notices it in the background and shows a
@@ -39,10 +48,11 @@ The viewer is a PWA with a service worker (`public/sw.js`):
 |------|---------|
 | `public/index.html`, `app.js`, `styles.css` | The viewer UI |
 | `public/vendor/pdf.*.mjs` | Pinned PDF.js (served from your own domain) |
-| `public/_headers` | Cache headers for static assets |
-| `public/sw.js` | Service worker: offline caching + new-deck detection |
+| `public/_headers` | Cache + hardening headers for static assets |
+| `public/_redirects` | SPA fallback so `/<name>` paths serve the viewer shell |
+| `public/sw.js` | Service worker: per-deck offline caching + new-deck detection |
 | `public/manifest.webmanifest`, `icon.svg` | PWA install metadata + icon |
-| `functions/deck.js` | Serves the deck PDF from R2 at `/deck` (read-only, single key) |
+| `functions/d/[[path]].js` | Serves `<path>.pdf` from R2 at `/d/<path>` (read-only, nested, each segment allowlisted) |
 | `scripts/flatten.mjs`, `publish.mjs` | Flatten a deck (Ghostscript) and publish it to R2 |
 | `wrangler.toml` | Pages config + R2 binding |
 
@@ -81,15 +91,19 @@ The viewer reads the PDF from R2, so this must be set up regardless of deploy op
 
 1. **Create a bucket** (dashboard → R2 → Create bucket). Use the name configured in
    `wrangler.toml`.
-2. **Upload your PDF** into that bucket and name the object exactly **`deck.pdf`**.
+2. **Upload your PDF(s).** Name the default deck exactly **`deck.pdf`** (served at `/`).
+   Each additional deck is **`<path>.pdf`** and is served at **`/<path>`** — e.g.
+   `meetup.pdf` → `/meetup`, or nest with folders: `wpblr/meetup.pdf` → `/wpblr/meetup`.
+   Every path segment must be lowercase letters, digits, and hyphens (max 8 segments).
 3. **Bind the bucket** to the deployed project: **Project → Settings → Bindings →
    add R2 binding** with variable name `PDF_BUCKET` pointing at your bucket (do this for
    Production). Redeploy so it takes effect.
 
-Verify: `https://<project>.pages.dev/deck` downloads the PDF, and the root URL shows the
+Verify: `https://<project>.pages.dev/d/deck` downloads the PDF, and the root URL shows the
 slides.
 
-> Keep this bucket dedicated to the deck — store nothing sensitive in it (see Security).
+> Keep this bucket dedicated to decks — every object is publicly reachable as `/<name>`,
+> so store nothing sensitive in it (see Security).
 
 ---
 
@@ -101,22 +115,27 @@ Cloudflare, the DNS record and HTTPS certificate are configured automatically.
 
 ---
 
-## Publishing a new deck
+## Publishing a deck
 
 ```bash
-npm run deck:publish -- ./path/to/new-deck.pdf
+npm run deck:publish -- ./path/to/deck.pdf                  # default deck, served at /
+npm run deck:publish -- ./slides/meetup.pdf                # → deck "meetup", at /meetup
+npm run deck:publish -- ./talk.pdf --name townhall          # explicit name, at /townhall
+npm run deck:publish -- ./talk.pdf --name wpblr/meetup      # nested, at /wpblr/meetup
 ```
 
-This **flattens** the PDF (see below) and uploads it to R2 as `deck.pdf`. No redeploy needed.
+This **flattens** the PDF (see below) and uploads it to R2 as `<path>.pdf`. The deck name
+defaults to the input filename (sanitised to lowercase letters/digits/hyphens); use
+`--name` to set it explicitly, including a `/`-nested path. No redeploy needed.
 
 Prefer the dashboard? Flatten first, then drag-and-drop the result:
 
 ```bash
-npm run deck:flatten -- ./path/to/new-deck.pdf   # prints the flattened file's path
+npm run deck:flatten -- ./path/to/meetup.pdf   # prints the flattened file's path
 ```
 
 …then upload that `*.flattened.pdf` in **dashboard → R2 → your bucket**, saving it as
-`deck.pdf` (overwrite the existing object).
+`<name>.pdf` (e.g. `meetup.pdf`; overwrite to replace an existing deck).
 
 Responses are briefly edge-cached, so a new deck may take a short while to appear; do a
 hard refresh, or purge the cache in the dashboard, to see it immediately.
@@ -156,13 +175,19 @@ throttle rather than charge. Leave billing on the free plan and there's nothing 
 
 ## Security
 
-- **`/deck` is read-only and serves a single fixed object.** The R2 object key is a
-  hard-coded constant (`deck.pdf`); nothing from the request (path, query, headers) is
-  used to choose what's read. There's no listing, enumeration, writing, or deleting.
+- **`/d/<path>` is read-only and every path segment is strictly allowlisted.** The object
+  key is `<path>.pdf`, built segment-by-segment where each segment must match
+  `^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$` — lowercase alphanumerics and interior hyphens,
+  **no dots or slashes inside a segment** — and the path is capped at 8 segments. Because
+  no segment can contain `.` or `/`, a request can only ever read `*.pdf` objects by exact
+  path: no path traversal (`..`/encoded slashes are rejected or normalised away), no
+  escaping the `.pdf` suffix, and no listing, enumeration, writing, or deleting. Anything
+  outside the allowlist returns 404. The viewer applies the identical check before
+  requesting a deck.
 - The function accesses **only its one dedicated bucket** — no other bucket or account
   resource is reachable from it.
-- Because that bucket is exposed (as the deck) keep it **dedicated to the public
-  presentation** and store nothing private in it.
+- Because **every object in that bucket is publicly reachable** as `/<name>`, keep it
+  **dedicated to public presentations** and store nothing private in it.
 - No secrets live in this repo. Deploy credentials, if you use the CLI, stay in your local
   Cloudflare login; nothing sensitive is committed.
 - **Hardening headers** ship on every response: `X-Content-Type-Options: nosniff`,
@@ -182,5 +207,8 @@ npm run vendor      # recopies the build into public/vendor
 
 ## Notes
 
-- Want multiple decks (e.g. an archive at their own URLs)? That's a small extension to the
-  function — open an issue or ask.
+- **Multiple decks** are built in: every `<path>.pdf` in the bucket is live at `/<path>`,
+  including nested folders like `wpblr/meetup.pdf` → `/wpblr/meetup` (the default
+  `deck.pdf` is at `/`). Each deck is cached independently for offline use.
+- Deck URLs are **unlisted, not secret** — anyone who knows (or guesses) a name can view
+  it. Keep the bucket public-only.

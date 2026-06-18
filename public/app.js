@@ -2,8 +2,26 @@ import * as pdfjsLib from "/vendor/pdf.min.mjs";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = "/vendor/pdf.worker.min.mjs";
 
-// Same-origin Pages Function that streams the current PDF from R2.
-const PDF_URL = "/deck";
+// Which deck to show comes from the URL path, which can be nested (folders are just key
+// prefixes in R2): "/" -> "deck", "/meetup" -> "meetup", "/wpblr/meetup" -> "wpblr/meetup".
+// Each segment uses the same allowlist as the /d/<path> Function (lowercase alphanumerics +
+// hyphens). The slide number lives in the hash (#3).
+//   - root ("/")            -> the default "deck"
+//   - a valid named path    -> that deck
+//   - a non-empty but invalid path -> null, so we show "not found" instead of silently
+//     falling back to the default deck (which would hide the user's mistyped URL).
+const SEG_RE = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
+function deckName() {
+  const segs = (location.pathname || "/").split("/").filter(Boolean).map((s) => s.toLowerCase());
+  if (segs.length === 0) return "deck";
+  const ok = segs.length <= 8 && segs.every((s) => SEG_RE.test(s));
+  return ok ? segs.join("/") : null;
+}
+
+const DECK = deckName();
+// Same-origin Pages Function that streams this deck's PDF from R2 (null = invalid path).
+const PDF_URL = DECK ? "/d/" + DECK : null;
+if (DECK && DECK !== "deck") document.title = `${DECK} — Slidedrop`;
 
 const els = {
   canvas: document.getElementById("canvas"),
@@ -138,6 +156,11 @@ async function load() {
   els.loader.hidden = false;
   els.canvas.classList.remove("ready");
   pageCache.clear();
+  if (!PDF_URL) {
+    // The URL path isn't a valid deck name — don't silently fall back to the default deck.
+    showError("No presentation at this URL. Check the link and try again.");
+    return;
+  }
   try {
     const task = pdfjsLib.getDocument({
       url: PDF_URL,
@@ -156,7 +179,7 @@ async function load() {
   } catch (e) {
     console.error(e);
     const msg = /404|not found/i.test(String(e?.message))
-      ? "No presentation found. Upload a PDF to R2 as “deck.pdf”."
+      ? `No presentation named “${DECK}”. Upload a PDF to R2 as “${DECK}.pdf”.`
       : "Couldn’t load the presentation. Check your connection and retry.";
     showError(msg);
   }

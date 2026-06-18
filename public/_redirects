@@ -1,0 +1,8 @@
+# SPA fallback for named decks: /meetup, /townhall, etc. all serve the viewer shell,
+# which then reads the deck name from the URL path and fetches /d/<name>.
+#
+# Precedence on Cloudflare Pages: a real static asset (/app.js, /vendor/*, /sw.js…) is
+# served before this rule, and the /d/* Pages Function runs before it too — so this only
+# catches navigation requests to deck names, rewriting them to the app shell (200, no
+# visible redirect). Slide deep-links stay in the hash, e.g. /meetup#3.
+/*  /index.html  200
